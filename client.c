@@ -16,7 +16,7 @@
 void error(char *msg);
 void *leggi_chat(void *sockfd);
 
-//DEVO CREARE UN THREAD PER RICEVERE+LOG E UNO PER MANDARE
+//DEVO CREARE UN THREAD PER RICEVERE+LOG E UNO PER MANDARE + probabilmente fare un fork per avere i messaggi ricevuti a parte
 
 
 int main(int argc, char *argv[])

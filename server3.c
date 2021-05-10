@@ -12,7 +12,7 @@
 
 
 //utenti massimi ammessi
-#define MAX_USERS 3
+#define MAX_USERS 5
 #define MAX_MSG_LEN 1024
 #define MAX_UNAME_LEN 25
 
@@ -31,6 +31,8 @@ struct msgargs {
 
 //====FUNZIONI====
 
+//MANCA ANCORA DA FARE L'ORDINAMENTO IN BASE AL TEMPO DI SPEDIZIONE (E QUINDI SPOSTARE IL TIMESTAMP LATO CLIENT) E POI OLTRE A OTTIMIZZAZIONI (users per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
+
 //funzione per lanciare un errore
 void error(char *msg)
 {
@@ -38,7 +40,7 @@ void error(char *msg)
     exit(1);
 }
 
-void chiudi()
+void chiudi() //FARGLI FARE QUALCOSA DI UTILE, MAGARI NON USANDO SIGINT MA TROVANDO UN MODO "GIUSTO" PER SPEGNERE IL SERVER
 {
     printf("Shutting down..."); //NON FUNZIONA
     exit(0);
@@ -61,7 +63,8 @@ static void *parla_con_client(void *clientinfo)
     char sendBuff[MAX_MSG_LEN]; //buffer messaggio da inviare
     char recvBuff[MAX_MSG_LEN]; //buffer messaggio da ricevere
     int nRead; //numero di byte letti
-    time_t ticks; //timestamp
+    time_t timer; //tempo dall'epoch ad ora
+    struct tm *now; //struct contenente ore, minuti, secondi, ecc del timer
     char welcome[] = "Welcome!\nInsert username:";
     char announce[23+MAX_UNAME_LEN]; //per il messaggio di annuncio, 21 caratteri per " has joined the chat!" + username + 1 finale \0
     char username[MAX_UNAME_LEN]; //username di massimo 24 caratteri 
@@ -88,12 +91,13 @@ static void *parla_con_client(void *clientinfo)
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo
     while ((nRead = read(info->clifd, recvBuff, sizeof(recvBuff))) > 1) {
         //salvo il timestamp
-        ticks = time(NULL);
+        timer = time(NULL);
+        now = localtime(&timer);
 
-        //scrivo il timestamp nel messaggio da inviare
-        snprintf(sendBuff, sizeof(sendBuff), "%.24s [%s]: ", ctime(&ticks), username);
+        //scrivo il timestamp nel messaggio da inviare (TEMPO DI RICEZIONE, FARE ANCHE TEMPO DI INVIO)
+        snprintf(sendBuff, sizeof(sendBuff), "(%d:%d:%d) [%s]: ", now->tm_hour, now->tm_min, now->tm_sec, username);
 
-        //attacco il messaggio ricevuto dopo il timestamp, stando attento a non andare oltre alla fine del buffer e lasciando un byte per aggiungere un carattere finale
+        //attacco il messaggio ricevuto dopo il timestamp, stando attento a non andare oltre alla fine del buffer
         strncat(sendBuff, recvBuff, sizeof(sendBuff)-strlen(sendBuff));
 
         //mando il messaggio al thread che se ne occupa tramite pipe
