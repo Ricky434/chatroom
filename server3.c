@@ -32,6 +32,7 @@ struct msgargs {
 //====FUNZIONI====
 
 //MANCA ANCORA DA FARE L'ORDINAMENTO IN BASE AL TEMPO DI SPEDIZIONE (E QUINDI SPOSTARE IL TIMESTAMP LATO CLIENT) E POI OLTRE A OTTIMIZZAZIONI (users per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
+//C'E' UN BUG CHE QUANDO FACCIO SPENGO I CLIENT PRIMA DI INSERIRE L'USERNAME IL SERVER CRASHA -> sopprimere SIGPIPE?
 
 //funzione per lanciare un errore
 void error(char *msg)
@@ -88,7 +89,7 @@ static void *parla_con_client(void *clientinfo)
     strcat(announce, " has joined the chat!\n");
     write(info->pipefd[1], announce, strlen(announce));
 
-    //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo
+    //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo (questa cosa verra' tolta, devo trovare un altro modo per chiudere la connessione)
     while ((nRead = read(info->clifd, recvBuff, sizeof(recvBuff))) > 1) {
         //salvo il timestamp
         timer = time(NULL);

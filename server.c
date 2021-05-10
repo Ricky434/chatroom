@@ -9,6 +9,9 @@
 #include <stdlib.h> //serve per gli errori (in questo caso)
 #include <pthread.h> //threads
 
+static void *parla_con_client(void *clinfo);
+void error(char *msg);
+
 //utenti massimi ammessi
 #define MAX_USERS 3
 
@@ -16,10 +19,8 @@
 struct clinfo {
     int *users; //utenti attualmente collegati
     int clifd; //file descriptor del client
+    FILE *logfile //file di log
 };
-
-static void *parla_con_client(void *clinfo);
-void error(char *msg);
 
 //QUELLO CHE HO FATTO FINORA DOVREBBE FUNZIONARE, DEVO FARE IN MODO CHE I SINGOLI THREAD MANDINO TUTTI I MESSAGGI RICEVUTI AD UN ALTRO THREAD CHE DEVE MANDARE A TUTTI I CLIENT TUTTI I MESSAGGI E SALVARSI I LOG
 
@@ -36,7 +37,9 @@ int main(int argc, char *argv[])
     char message[] = "Il server e' pieno, riprovare piu' tardi";
 
     //preparo un array di MAX_USERS pthread_t
-    pthread_t thread_id[MAX_USERS];
+    pthread_t clithread_id[MAX_USERS];
+
+    FILE *logfile;
 
     if(argc != 2) {
         //MAGARI TRASFORMARLO IN ERROR
@@ -69,12 +72,19 @@ int main(int argc, char *argv[])
     //metto in ascolto il socket, permettendo una coda di 10 richieste
     listen(listenfd, 10);
 
+    //apro il file di log
+    logfile = fopen("log.txt", "rw");
+
+    //creo thread che si occupa della gestione dei messaggi
+    pthread_create(&msgthread_id, 0, &gestisci_messaggi, &arg);
+
     //il server comincia ad accettare messaggi
     while(1) {
         //accetto la connessione in arrivo e apro un socket con file descriptor connfd per comunicare
         clifd = accept(listenfd, (struct sockaddr*)&cli_addr, &clilen); //forse cli_addr e clilen sono inutili
 
         //se il server e' pieno manda un messaggio al client che sta provando a connettersi, chiudi il suo file descriptor e torna all'inizio del ciclo
+        //SINCRONIZZAZIONE?
         if (users >= MAX_USERS) {
             write(clifd, message, strlen(message));
             close(clifd);
@@ -85,9 +95,10 @@ int main(int argc, char *argv[])
         //preparo le informazioni d
         client_info.clifd = clifd;
         client_info.users = &users;
+        client_info.logfile = logfile;
 
         //creo un thread per gestire il client appena accettato e aumento il contatore degli utenti
-        pthread_create(&thread_id[users], 0, &parla_con_client, &client_info);
+        pthread_create(&clithread_id[users], 0, &parla_con_client, &client_info);
         users++;
         sleep(1);
 
@@ -107,9 +118,8 @@ static void *parla_con_client(void *clinfo) //static?
     //creo una variabile per salvare il numero di byte letti
     int nRead;
 
-    //salvo il file descriptor del client e il puntatore al contatore degli utenti
-    int clientfd = ((struct clinfo*)clinfo)->clifd;
-    int *users = ((struct clinfo*)clinfo)->users;
+    //salvo le informazioni
+    struct clinfo info = *((struct clinfo *)clinfo);
 
     //inizializzo la variabile in cui mettere il timestamp dell messaggio
     time_t ticks;
@@ -121,7 +131,7 @@ static void *parla_con_client(void *clinfo) //static?
     //TODO chiedi nome utente
 
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo
-    while ((nRead = read(clientfd, recvBuff, sizeof(recvBuff))) > 1) {
+    while ((nRead = read(info.clifd, recvBuff, sizeof(recvBuff))) > 1) {
         //salvo il timestamp
         ticks = time(NULL);
 
@@ -135,7 +145,7 @@ static void *parla_con_client(void *clinfo) //static?
         strcat(sendBuff, "\n");
 
         //invio il messaggio
-        write(clientfd, sendBuff, strlen(sendBuff));
+        write(info.clifd, sendBuff, strlen(sendBuff));
 
         //DA FAR DIVENTARE LOG: scrivo il messaggio anche su stdout perche' posso
         write(1, sendBuff, strlen(sendBuff)-1);
@@ -146,10 +156,15 @@ static void *parla_con_client(void *clinfo) //static?
     }
     
     //una volta finito di parlare con il client chiudo la connessione
-    close(clientfd);
-    *users -= 1;
+    close(info.clifd);
+    *(info.users) -= 1;
     return 0;
     //exit?
+}
+
+static void *gestisci_messaggi(void *arg)
+{
+
 }
 
 //funzione per lanciare un errore
