@@ -63,6 +63,7 @@ static void *parla_con_client(void *clientinfo)
     int nRead; //numero di byte letti
     time_t ticks; //timestamp
     char welcome[] = "Welcome!\nInsert username:";
+    char announce[23+MAX_UNAME_LEN]; //per il messaggio di annuncio, 21 caratteri per " has joined the chat!" + username + 1 finale \0
     char username[MAX_UNAME_LEN]; //username di massimo 24 caratteri 
 
     //salvo le informazioni
@@ -73,9 +74,16 @@ static void *parla_con_client(void *clientinfo)
     memset(recvBuff, 0, sizeof(recvBuff));
 
     //chiedi nome utente
-    write(info->clifd, welcome, strlen(welcome));
-    read(info->clifd, username, sizeof(username));
-    username[strlen(username)-1] = 0; //imposto l'ultimo carattere a 0 per eliminare lo \n
+    while (strlen(username) == 0) {
+        write(info->clifd, welcome, strlen(welcome));
+        read(info->clifd, username, sizeof(username));
+        username[strlen(username)-1] = 0; //imposto l'ultimo carattere a 0 per eliminare lo \n
+    }
+
+    //annuncia
+    strcpy(announce, username);
+    strcat(announce, " has joined the chat!\n");
+    write(info->pipefd[1], announce, strlen(announce));
 
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo
     while ((nRead = read(info->clifd, recvBuff, sizeof(recvBuff))) > 1) {
