@@ -12,6 +12,8 @@
 
 #define FIFOFILE "clientfifo"
 
+//TROVARE UN MODO PER CHIUDERSI GENTILMENTE QUANDO IL CLIENT SI CHIUDE
+
 int main(int argc, char *argv[])
 {
     int fd;
