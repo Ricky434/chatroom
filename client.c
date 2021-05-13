@@ -8,35 +8,53 @@
 #include <sys/types.h> //serve per il tipo del socket
 #include <stdlib.h> //serve per gli errori
 #include <pthread.h> //threads
+#include <sys/stat.h> //fifo
+#include <fcntl.h> //filecontrol (open)
 
-//USARE QUESTO INVECE DI error
-#define handle_error_en(en, msg) \
-       { errno = en; perror(msg); exit(EXIT_FAILURE); }
-
+#define FIFOFILE "clientfifo"
 
 //====FUNZIONI====
-
-//funzione per lanciare un errore DA CAMBIARE CON IL DEFINE (vedi sopra)
 void error(char *msg)
 {
     perror(msg);
     exit(1);
 }
 
-//DEVO CREARE UN THREAD PER RICEVERE+LOG E UNO PER MANDARE + probabilmente fare un fork per avere i messaggi ricevuti a parte
+void quit(int socket)
+{
+    write(socket, "!exit", 5);
+    close(socket); //dovrei chiudere anche gli altri file ma non posso, comunque con exit si chiudono in teoria
+    exit(0);
+}
+//TROVARE MODO PER SEPARARE INPUT E OUTPUT, permettere hostnames oltre a indirizzi ip
+//LOGFILE APPEND O NO?, VIENE MESSO ANCHE IL NOME NEL LOGFILE
+//ERRORE QUANDO IL SERVER CHIUDE E IL CLIENT E' ANCORA APERTO
+//FORSE CONVIENE LEVARE A OGNI MESSAGGIO IL \n FINALE DA INVIARE AL SERVER PER COERENZA
 
 //====THREADS====
 
-//FARE IN MODO CHE CI SIA UN THREAD CHE ASCOLTA SEMPRE E PRINTA I MESSAGGI RICEVUTI SIA SU STDOUT CHE SU LOG, E UN THREAD CHE RICEVE IN INPUT I MESSAGGI DA INVIARE AL SERVER
 //aggiungere commenti
 void *leggi_chat(void *sockfd)
 {
-    int n;
+    int n, fd;
     int *socket;
     char recvBuff[1024];
+    struct stat res;
 
     socket = sockfd;
     memset(recvBuff, 0, sizeof(recvBuff));
+
+    if (stat(FIFOFILE, &res)) { //controlla se gia esiste una fifo
+        if (mkfifo(FIFOFILE, S_IRUSR | S_IWUSR) == -1 )
+                error("ERROR creating fifo");
+    }
+    else if (!S_ISFIFO(res.st_mode)) { //controlla se il file che esiste gia e' una fifo o no
+        fprintf(stderr, "File already exists and is not a named pipe\n");
+        exit(5);
+  }
+    //non ho un controllo in caso il file gia' esista e non sia un fifo (vedi mkfifo2)
+    
+    fd = open("clientfifo", O_WRONLY);
 
     while (1) {
         //ricevo il messaggio
@@ -46,9 +64,9 @@ void *leggi_chat(void *sockfd)
         recvBuff[n] = 0;
 
         //FPUTS O WRITE? SERVE ERRORE? scrivo su sdout il messaggio ricevuto
-        if(write(1, recvBuff, strlen(recvBuff)) == 0)
+        if(write(fd, recvBuff, strlen(recvBuff)) == 0)
         {
-            printf("\n Error : Write error\n");
+            printf("\n Error : Write error\n"); //ERROR HANDLING
         }
 
         memset(recvBuff, 0,sizeof(recvBuff));
@@ -61,15 +79,13 @@ int main(int argc, char *argv[])
 {
     //creo la variabile per il file descriptor del socket
     int sockfd;
-
     //preparo il buffer per mandare messaggi
     char sendBuff[1024];
-
     //creo la variabile delle informazioni del socket del server
     struct sockaddr_in serv_addr;
- 
     //creo la variabile per salvare l'id del thread che verra' creato
     pthread_t thread_id;
+    FILE *clilog;
 
     //se il programma viene chiamato senza specificare indirizzo e porta del server il programma termina spiegando cosa inserire
     if(argc != 3) {
@@ -101,14 +117,36 @@ int main(int argc, char *argv[])
     //creo un thread che legge costantemente i messaggi che arrivano dal server
     pthread_create(&thread_id, 0, &leggi_chat, &sockfd);
 
+    clilog = fopen("clilog.txt", "w+");
+
+    //write(1, "Username: ", strlen("Username: "));
+    printf("Username: ");
+    fflush(stdout);
+
     //invio e ricevo messaggi al server finche' non premo invio senza aver scritto niente (da levare e trovare un altro metodo per chiudere)
     //DA FARE: capire bene come gestire la cosa di omettere l'ultimo byte dei messaggi come fa il prof negli esempi
-    while (read(0, sendBuff, sizeof(sendBuff)) > 1){
+    while (1){
+        read(0, sendBuff, sizeof(sendBuff));
+
+        if (strcmp(sendBuff, "!exit\n") == 0) {
+            quit(sockfd);
+        }
+        if (strcmp(sendBuff, "\n") == 0) {
+            printf("> "); //ripetitivo, brutto
+            fflush(stdout);
+            continue;
+        }
+
+        fputs(sendBuff, clilog); //logfile
+        fflush(clilog);
+
         //mando il messaggio
         write(sockfd, sendBuff, strlen(sendBuff)); //error handling?
 
         //pulisco il buffer
         memset(sendBuff, 0, sizeof(sendBuff));
+
+        printf("> "); //prompt
+        fflush(stdout);
     }
-    return 0;
 }

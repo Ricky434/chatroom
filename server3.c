@@ -33,6 +33,9 @@ struct msgargs {
 
 //MANCA ANCORA DA FARE L'ORDINAMENTO IN BASE AL TEMPO DI SPEDIZIONE (E QUINDI SPOSTARE IL TIMESTAMP LATO CLIENT) E POI OLTRE A OTTIMIZZAZIONI (users per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
 //C'E' UN BUG CHE QUANDO FACCIO SPENGO I CLIENT PRIMA DI INSERIRE L'USERNAME IL SERVER CRASHA -> sopprimere SIGPIPE?
+//FARE MAKEFILE
+//mutex per clientinfo?
+//BUG VARI
 
 //funzione per lanciare un errore
 void error(char *msg)
@@ -66,7 +69,8 @@ static void *parla_con_client(void *clientinfo)
     int nRead; //numero di byte letti
     time_t timer; //tempo dall'epoch ad ora
     struct tm *now; //struct contenente ore, minuti, secondi, ecc del timer
-    char welcome[] = "Welcome!\nInsert username:";
+    char welcome[] = "Welcome, please insert username\n";
+    char goodbye[] = " has left the chat\n";
     char announce[23+MAX_UNAME_LEN]; //per il messaggio di annuncio, 21 caratteri per " has joined the chat!" + username + 1 finale \0
     char username[MAX_UNAME_LEN]; //username di massimo 24 caratteri 
 
@@ -90,7 +94,13 @@ static void *parla_con_client(void *clientinfo)
     write(info->pipefd[1], announce, strlen(announce));
 
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo (questa cosa verra' tolta, devo trovare un altro modo per chiudere la connessione)
-    while ((nRead = read(info->clifd, recvBuff, sizeof(recvBuff))) > 1) {
+    while (1) {
+        read(info->clifd, recvBuff, sizeof(recvBuff));
+
+        if (strcmp(recvBuff, "!exit") == 0) { //forse !exit da mettere tra i #define
+            break;
+        }
+
         //salvo il timestamp
         timer = time(NULL);
         now = localtime(&timer);
@@ -111,8 +121,13 @@ static void *parla_con_client(void *clientinfo)
     
     //una volta finito di parlare con il client chiudo la connessione
     close(info->clifd);
+
+    strcpy(sendBuff, username);
+    strcat(sendBuff, goodbye);
     *(info->users) -= 1;
     info->in_use = 0;
+
+    write(info->pipefd[1], sendBuff, strlen(sendBuff));
     return 0;
     //exit?
 }
