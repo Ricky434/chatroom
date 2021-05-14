@@ -36,6 +36,8 @@ struct msgargs {
 //FARE MAKEFILE
 //mutex per clientinfo?
 //BUG VARI
+//LE MODALITA' DI DISTRIBUZIONE VANNO IMPLEMENTATE TUTTE E DUE E POSSONO ESSERE SCELTE TRAMITE OPZIONE DA LINEA DI COMANDO
+//suddividere in funzioni?
 
 //funzione per lanciare un errore
 void error(char *msg)
@@ -46,7 +48,7 @@ void error(char *msg)
 
 void chiudi() //FARGLI FARE QUALCOSA DI UTILE, MAGARI NON USANDO SIGINT MA TROVANDO UN MODO "GIUSTO" PER SPEGNERE IL SERVER
 {
-    printf("Shutting down..."); //NON FUNZIONA
+    printf("\rShutting down...\n"); //NON FUNZIONA
     exit(0);
 }
 
@@ -101,7 +103,7 @@ static void *parla_con_client(void *clientinfo)
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo (questa cosa verra' tolta, devo trovare un altro modo per chiudere la connessione)
     while (1) {
         if (read(info->clifd, recvBuff, sizeof(recvBuff)) == 0) {
-            printf("ERROR reading from client"); //necessario il print?
+            printf("ERROR reading from client\n"); //necessario il print?
             break; //o pthread_exit()?
         }
 
@@ -179,6 +181,21 @@ int main(int argc, char *argv[])
     pthread_t clithread_id[MAX_USERS], msgthread_id;
     int pipefd[2]; //file descriptor della pipe
     struct msgargs msgthread_args;
+
+    //per sigaction ====
+    struct sigaction act;
+    sigset_t set;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    sigaddset(&set, SIGINT);
+
+    act.sa_flags = 0;
+    act.sa_mask = set;
+    act.sa_handler = &chiudi;
+
+    sigaction(SIGINT, &act, NULL);
+    //fine sigaction ====
 
     //se non ci sono abbastanza argomenti 
     if(argc != 2) {
