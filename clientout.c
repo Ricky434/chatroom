@@ -12,21 +12,25 @@
 
 #define FIFOFILE "clientfifo"
 
-//TROVARE UN MODO PER CHIUDERSI GENTILMENTE QUANDO IL CLIENT SI CHIUDE
-
 int main(int argc, char *argv[])
 {
     int fd;
     char recvBuff[1024];
 
     memset(recvBuff, 0, sizeof(recvBuff));
-    fd = open(FIFOFILE, O_RDONLY);
+    
+    if ((fd = open(FIFOFILE, O_RDONLY)) == -1) {
+        perror("ERROR opening fifo file");
+        printf("Avvia prima il client e poi %s\n", argv[0]);
+        exit(1);
+    }
 
     while (1) {
         //ricevo il messaggio
         if (read(fd, recvBuff, sizeof(recvBuff)) == 0) {
-            printf("ERROR reading from fifo\n"); //error handling?
-            exit(1);
+            printf("Chat terminated\n"); //funzione a parte? trattarlo come errore?
+            close(fd);
+            exit(0);
         }
 
         printf(recvBuff);

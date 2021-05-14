@@ -12,9 +12,10 @@
 
 
 //utenti massimi ammessi
-#define MAX_USERS 5
+#define MAX_USERS 2
 #define MAX_MSG_LEN 1024
 #define MAX_UNAME_LEN 25
+#define EXIT_CMD "!exit"
 
 //informazioni da passare al thread che gestisce il client
 typedef struct {
@@ -31,8 +32,7 @@ struct msgargs {
 
 //====FUNZIONI====
 
-//MANCA ANCORA DA FARE L'ORDINAMENTO IN BASE AL TEMPO DI SPEDIZIONE (E QUINDI SPOSTARE IL TIMESTAMP LATO CLIENT) E POI OLTRE A OTTIMIZZAZIONI (users per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
-//C'E' UN BUG CHE QUANDO FACCIO SPENGO I CLIENT PRIMA DI INSERIRE L'USERNAME IL SERVER CRASHA -> sopprimere SIGPIPE?
+//MANCA ANCORA DA FARE L'ORDINAMENTO IN BASE AL TEMPO DI SPEDIZIONE (E QUINDI SPOSTARE IL TIMESTAMP LATO CLIENT) E POI OLTRE A OTTIMIZZAZIONI (users e nRead per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
 //FARE MAKEFILE
 //mutex per clientinfo?
 //BUG VARI
@@ -81,12 +81,17 @@ static void *parla_con_client(void *clientinfo)
     memset(sendBuff, 0, sizeof(sendBuff));
     memset(recvBuff, 0, sizeof(recvBuff));
 
-    //chiedi nome utente
-    while (strlen(username) == 0) {
-        write(info->clifd, welcome, strlen(welcome));
-        read(info->clifd, username, sizeof(username));
-        username[strlen(username)-1] = 0; //imposto l'ultimo carattere a 0 per eliminare lo \n
-    }
+    //chiedi username
+    write(info->clifd, welcome, strlen(welcome));
+    nRead = read(info->clifd, username, sizeof(username));
+    username[strlen(username)-1] = 0; //imposto l'ultimo carattere a 0 per eliminare lo \n
+
+    //se il client ha inviato !exit come username, vuol dire che e' terminato, quindi faccio terminare anche il thread che se ne occupa
+    if (strcmp(username, EXIT_CMD) == 0 || nRead == 0) { 
+            *(info->users) -= 1;
+            info->in_use = 0;
+            return 0; //exit o return?
+        }
 
     //annuncia
     strcpy(announce, username);
@@ -95,9 +100,12 @@ static void *parla_con_client(void *clientinfo)
 
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo (questa cosa verra' tolta, devo trovare un altro modo per chiudere la connessione)
     while (1) {
-        read(info->clifd, recvBuff, sizeof(recvBuff));
+        if (read(info->clifd, recvBuff, sizeof(recvBuff)) == 0) {
+            printf("ERROR reading from client"); //necessario il print?
+            break; //o pthread_exit()?
+        }
 
-        if (strcmp(recvBuff, "!exit") == 0) { //forse !exit da mettere tra i #define
+        if (strcmp(recvBuff, EXIT_CMD) == 0) { //forse !exit da mettere tra i #define
             break;
         }
 
@@ -106,7 +114,7 @@ static void *parla_con_client(void *clientinfo)
         now = localtime(&timer);
 
         //scrivo il timestamp nel messaggio da inviare (TEMPO DI RICEZIONE, FARE ANCHE TEMPO DI INVIO)
-        snprintf(sendBuff, sizeof(sendBuff), "(%d:%d:%d) [%s]: ", now->tm_hour, now->tm_min, now->tm_sec, username);
+        snprintf(sendBuff, sizeof(sendBuff), "(%02d:%02d:%02d) [%s]: ", now->tm_hour, now->tm_min, now->tm_sec, username);
 
         //attacco il messaggio ricevuto dopo il timestamp, stando attento a non andare oltre alla fine del buffer
         strncat(sendBuff, recvBuff, sizeof(sendBuff)-strlen(sendBuff));
@@ -129,7 +137,7 @@ static void *parla_con_client(void *clientinfo)
 
     write(info->pipefd[1], sendBuff, strlen(sendBuff));
     return 0;
-    //exit?
+    //exit o return?
 }
 
 static void *gestisci_messaggi(void *clients_log)
@@ -167,7 +175,7 @@ int main(int argc, char *argv[])
     int listenfd, tempfd, clino, users = 0;
     struct sockaddr_in serv_addr;
     clinfo client_info[MAX_USERS];
-    char message[] = "Il server e' pieno, riprovare piu' tardi"; //messaggio da usare in caso il server sia pieno
+    char message[] = "Il server e' pieno, riprovare piu' tardi\n"; //messaggio da usare in caso il server sia pieno
     pthread_t clithread_id[MAX_USERS], msgthread_id;
     int pipefd[2]; //file descriptor della pipe
     struct msgargs msgthread_args;
