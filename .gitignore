@@ -13,3 +13,6 @@ server3-back.c
 # log
 log.txt
 clilog.txt
+
+# vscode
+.vscode
