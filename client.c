@@ -81,10 +81,11 @@ void *leggi_chat(void *sockfd)
 int main(int argc, char *argv[])
 {
     int sockfd; //creo la variabile per il file descriptor del socket
-    char sendBuff[1024]; //preparo il buffer per mandare messaggi
+    char sendBuff[1024], readBuff[1024]; //preparo il buffer per mandare messaggi
     struct sockaddr_in serv_addr; //creo la variabile delle informazioni del socket del server
     pthread_t thread_id; //creo la variabile per salvare l'id del thread che verra' creato
     FILE *clilog;
+    time_t now;
 
     //se il programma viene chiamato senza specificare indirizzo e porta del server il programma termina spiegando cosa inserire
     if(argc != 3) {
@@ -95,6 +96,7 @@ int main(int argc, char *argv[])
 
     //"pulisco" il buffer e serv_addr
     memset(sendBuff, 0, sizeof(sendBuff));
+    memset(readBuff, 0, sizeof(readBuff));
     memset(&serv_addr, 0, sizeof(serv_addr)); 
 
     //creo il socket
@@ -125,29 +127,38 @@ int main(int argc, char *argv[])
     //invio e ricevo messaggi al server finche' non premo invio senza aver scritto niente (da levare e trovare un altro metodo per chiudere)
     //DA FARE: capire bene come gestire la cosa di omettere l'ultimo byte dei messaggi come fa il prof negli esempi
     while (1){
-        read(0, sendBuff, sizeof(sendBuff)); //error handling?
+        read(0, readBuff, sizeof(readBuff)); //error handling? READ O SCANF?
 
-        if (strcmp(sendBuff, "!exit\n") == 0) { //termina programma
+        if (strcmp(readBuff, "!exit\n") == 0) { //termina programma, define?
             fclose(clilog);
             quit(sockfd);
         }
-        if (strcmp(sendBuff, "\n") == 0) {
+        if (strcmp(readBuff, "\n") == 0) {
             printf("> "); //ripetitivo?
             fflush(stdout);
             continue;
         }
 
-        fputs(sendBuff, clilog); //logfile
+        //creo timestamp
+        now = time(NULL);
+
+        fprintf(clilog, "[%.24s] %s", ctime(&now), readBuff); //logfile
         fflush(clilog);
 
+        //aggiungo timestamp
+        snprintf(sendBuff, sizeof(sendBuff), "%ld:%s", now, readBuff);
+
+        //levo il carattere di ritorno - mi sa che non ne vale la pena PIUTTOSTO DOVREI AGGIUNGERE \0 DOPO \n? O COME MINIMO NELL'ULTIMO BYTE DEL BUFFER PER ESSERE SICURO CHE LA STRINGA TERMINI?
+        //sendBuff[strlen(sendBuff)-1] = 0; //modo piu efficace di settare l'ultimo carattere a \0?, forse e' meglio lasciare lo \n
         //mando il messaggio
-        if (write(sockfd, sendBuff, strlen(sendBuff)) == 0) {
+        if (write(sockfd, sendBuff, strlen(sendBuff)) == 0) { //forse devo inviare tutti e 1024 i byte dek buffer, visto che il server provera' a leggerne 1024...
             printf("\rERROR writing from server, it might be down\n");
             exit(1); //vedi che error code metterci
         }
 
         //pulisco il buffer
         memset(sendBuff, 0, sizeof(sendBuff));
+        memset(readBuff, 0, sizeof(readBuff));
 
         printf("> "); //prompt
         fflush(stdout);

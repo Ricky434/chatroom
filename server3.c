@@ -25,6 +25,13 @@ typedef struct {
     int *pipefd; //file descriptor della pipe
 } clinfo;
 
+typedef struct {
+    time_t timestamp; //timestamp di invio del messaggio
+    char msg[MAX_MSG_LEN]; //messaggio
+    char usr[MAX_UNAME_LEN]; //mittente del messaggio
+    int isannounce; //se = 1 il messaggio e' un annuncio
+} message_s;
+
 struct msgargs {
     clinfo *clients;
     int *pipefd;
@@ -32,12 +39,14 @@ struct msgargs {
 
 //====FUNZIONI====
 
-//MANCA ANCORA DA FARE L'ORDINAMENTO IN BASE AL TEMPO DI SPEDIZIONE (E QUINDI SPOSTARE IL TIMESTAMP LATO CLIENT) E POI OLTRE A OTTIMIZZAZIONI (users e nRead per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
+//OLTRE A OTTIMIZZAZIONI (users e nRead per esempio) E COMMENTI DOVREBBE ESSERE FATTO IL LATO SERVER
 //FARE MAKEFILE
 //mutex per clientinfo?
 //BUG VARI
-//LE MODALITA' DI DISTRIBUZIONE VANNO IMPLEMENTATE TUTTE E DUE E POSSONO ESSERE SCELTE TRAMITE OPZIONE DA LINEA DI COMANDO
 //suddividere in funzioni?
+//cerca dove possibile di sostituire tutti i vari strcpy, ecc con snprintf
+//liberare tutti i puntatori, anche quelli senza malloc?
+//forse non servono tutti tutti i memset...
 
 //funzione per lanciare un errore
 void error(char *msg)
@@ -61,6 +70,45 @@ int get_client_number(clinfo client_info[])
     return -1;
 }
 
+void ordina(message_s *listamsg[], int nmsg)
+{
+    int m;
+    message_s *temp;
+
+    temp = malloc(sizeof(message_s));
+    memset(temp, 0, sizeof(message_s));
+    
+    for (int i = 0; i < nmsg; i++) { //selection sort, inefficiente come poche cose, per come l'ho implementato
+        m = i;
+        for (int j = i+1; j < nmsg; j++) {
+            //invece di fare cosi forse e' meglio aggiungere un timestamp anche al messaggio di announce
+            if (listamsg[j]->timestamp < listamsg[m]->timestamp) //il timestamp e' lungo 10 caratteri
+                m = j;
+        }
+        
+        memcpy(temp, listamsg[i], sizeof(message_s));
+        memcpy(listamsg[i], listamsg[m], sizeof(message_s));
+        memcpy(listamsg[m], temp, sizeof(message_s));
+    }
+    free(temp);
+}
+
+//riempie il message_s DEST con il MESSAGE, il SENDER e IS_ANNOUNCE, e ricava il timestamp da MESSAGE
+//conviene implementarlo qui o nel client?
+void gen_msg(message_s *dest, char *message, char *sender, int is_announce)
+{
+    char *sepPtr; //puntatore al carattere che separa il timestamp dal messaggio effettivo
+
+    memset(dest, 0, sizeof(*dest));
+
+    strcpy(dest->usr, sender);
+    dest->isannounce = is_announce;
+    dest->timestamp = atol(message);
+
+    sepPtr = strchr(message, ':'); //trovo il separatore tra il timestamp e il messaggio
+    strcpy(dest->msg, sepPtr+1);
+}
+
 //====THREADS====
 
 static void *parla_con_client(void *clientinfo)
@@ -69,60 +117,62 @@ static void *parla_con_client(void *clientinfo)
     char sendBuff[MAX_MSG_LEN]; //buffer messaggio da inviare
     char recvBuff[MAX_MSG_LEN]; //buffer messaggio da ricevere
     int nRead; //numero di byte letti
-    time_t timer; //tempo dall'epoch ad ora
-    struct tm *now; //struct contenente ore, minuti, secondi, ecc del timer
     char welcome[] = "Welcome, please insert username\n";
     char goodbye[] = " has left the chat\n";
-    char announce[23+MAX_UNAME_LEN]; //per il messaggio di annuncio, 21 caratteri per " has joined the chat!" + username + 1 finale \0
-    char username[MAX_UNAME_LEN]; //username di massimo 24 caratteri 
+    char announce[] = " has joined the chat!\n";
+    char username[MAX_UNAME_LEN]; //username di massimo 24 caratteri
+    message_s messaggio;
 
     //salvo le informazioni
     clinfo *info = clientinfo;
 
     //"pulisco" le locazioni di memoria dei buffer dei messaggi
-    memset(sendBuff, 0, sizeof(sendBuff));
-    memset(recvBuff, 0, sizeof(recvBuff));
+    memset(sendBuff, 0, MAX_MSG_LEN);
+    memset(recvBuff, 0, MAX_MSG_LEN);
+    memset(username, 0, MAX_UNAME_LEN);
 
     //chiedi username
     write(info->clifd, welcome, strlen(welcome));
-    nRead = read(info->clifd, username, sizeof(username));
-    username[strlen(username)-1] = 0; //imposto l'ultimo carattere a 0 per eliminare lo \n
+    nRead = read(info->clifd, recvBuff, MAX_MSG_LEN);
+    recvBuff[nRead-1] = 0; //imposto l'ultimo carattere a 0 per eliminare lo \n
 
     //se il client ha inviato !exit come username, vuol dire che e' terminato, quindi faccio terminare anche il thread che se ne occupa
-    if (strcmp(username, EXIT_CMD) == 0 || nRead == 0) { 
+    if (strcmp(recvBuff, EXIT_CMD) == 0 || nRead == 0) { 
             *(info->users) -= 1;
             info->in_use = 0;
             return 0; //exit o return?
         }
 
+    //imposto username
+    strncpy(username, strchr(recvBuff, ':')+1, MAX_UNAME_LEN);
+
     //annuncia
-    strcpy(announce, username);
-    strcat(announce, " has joined the chat!\n");
-    write(info->pipefd[1], announce, strlen(announce));
+    sprintf(sendBuff, "%s%s", recvBuff, announce); //questo o due strcat?
+    gen_msg(&messaggio, sendBuff, username, 1);
+    write(info->pipefd[1], &messaggio, sizeof(messaggio));
+
+    //pulisci buffer
+    memset(sendBuff, 0, MAX_MSG_LEN);
+    memset(recvBuff, 0, MAX_MSG_LEN);
+
+    //una volta inviato il messaggio di annuncio, per il quale mi serve il timestamp, sostituisco la variabile username con solo il nome effettivo
+
 
     //comincio il ciclo in cui ogni volta che il client manda un messaggio, io lo leggo e lo rimando indietro con attaccato il timestamp. Quando ricevo un messaggio lungo solo un byte (per es. uno \n, cioe' quando il client preme invio senza scrivere niente) interrrompo il ciclo (questa cosa verra' tolta, devo trovare un altro modo per chiudere la connessione)
     while (1) {
         if (read(info->clifd, recvBuff, sizeof(recvBuff)) == 0) {
-            printf("ERROR reading from client\n"); //necessario il print?
-            break; //o pthread_exit()?
+            printf("ERROR reading from client %s\n", username); //necessario il print?
+            break; //o pthread_exit()? -> no, devo settare il clientfd ecc a non in uso
         }
 
         if (strcmp(recvBuff, EXIT_CMD) == 0) { //forse !exit da mettere tra i #define
             break;
         }
 
-        //salvo il timestamp
-        timer = time(NULL);
-        now = localtime(&timer);
-
-        //scrivo il timestamp nel messaggio da inviare (TEMPO DI RICEZIONE, FARE ANCHE TEMPO DI INVIO)
-        snprintf(sendBuff, sizeof(sendBuff), "(%02d:%02d:%02d) [%s]: ", now->tm_hour, now->tm_min, now->tm_sec, username);
-
-        //attacco il messaggio ricevuto dopo il timestamp, stando attento a non andare oltre alla fine del buffer
-        strncat(sendBuff, recvBuff, sizeof(sendBuff)-strlen(sendBuff));
+        gen_msg(&messaggio, recvBuff, username, 0);
 
         //mando il messaggio al thread che se ne occupa tramite pipe
-        write(info->pipefd[1], sendBuff, strlen(sendBuff));
+        write(info->pipefd[1], &messaggio, sizeof(messaggio));
 
         //pulisco i buffer per inviare e ricevere il messaggio
         memset(sendBuff, 0, sizeof(sendBuff));
@@ -132,12 +182,12 @@ static void *parla_con_client(void *clientinfo)
     //una volta finito di parlare con il client chiudo la connessione
     close(info->clifd);
 
-    strcpy(sendBuff, username);
-    strcat(sendBuff, goodbye);
+    sprintf(sendBuff, "%ld:%s%s", time(NULL), username, goodbye);
     *(info->users) -= 1;
-    info->in_use = 0;
+    info->in_use = 0; //serve tmux
 
-    write(info->pipefd[1], sendBuff, strlen(sendBuff));
+    gen_msg(&messaggio, sendBuff, username, 1);
+    write(info->pipefd[1], &messaggio, sizeof(messaggio));
     return 0;
     //exit o return?
 }
@@ -145,8 +195,10 @@ static void *parla_con_client(void *clientinfo)
 static void *gestisci_messaggi(void *clients_log)
 {
     char sendBuff[MAX_MSG_LEN];
+    message_s messaggio;
     FILE *logfile;
     struct msgargs *args = clients_log;
+    struct tm *loctime;
 
     memset(sendBuff, 0, sizeof(sendBuff));
 
@@ -156,7 +208,16 @@ static void *gestisci_messaggi(void *clients_log)
         error("ERROR opening file");
 
     while (1) {
-        read(args->pipefd[0], sendBuff, sizeof(sendBuff));
+        read(args->pipefd[0], &messaggio, sizeof(messaggio));
+
+        loctime = localtime(&(messaggio.timestamp));
+
+        if (messaggio.isannounce) {
+            strcpy(sendBuff, messaggio.msg);
+        } else {
+            snprintf(sendBuff, sizeof(sendBuff), "(%02d:%02d:%02d) [%s]: %s", loctime->tm_hour, loctime->tm_min, loctime->tm_sec, messaggio.usr, messaggio.msg);
+        }
+
         fputs(sendBuff, logfile);
         fflush(logfile);
 
@@ -169,6 +230,91 @@ static void *gestisci_messaggi(void *clients_log)
     }
 }
 
+static void *gestisci_messaggi_ordinati(void *clients_log)
+{
+    message_s *msgBuff[10]; //lista di 10 pointers, che conterranno fino a 10 messaggi
+    FILE *logfile;
+    struct msgargs *args = clients_log;
+    int msgcounter = 0, select_ris;
+    char sendBuff[MAX_MSG_LEN];
+    fd_set fdset; //set di file descriptors da ascoltare
+    struct timeval timeout;
+    struct tm *loctime;
+
+
+    memset(msgBuff, 0, sizeof(msgBuff));
+    memset(sendBuff, 0, sizeof(sendBuff));
+
+    for (int i = 0; i < 10; i++) {
+        msgBuff[i] = malloc(sizeof(message_s)); //COME FACCIO IL FREE? -> forse posso mandare un messaggio a questo thread sulla pipe quando sto per chiudere il server, e se gli arriva questo messaggio esce dal while
+    }
+
+    //apro il file di log
+    logfile = fopen("log.txt", "w+"); //forse lo posso far aprire dal thread che se ne occupa
+    if (logfile == NULL)
+        error("ERROR opening file");
+
+    while (1) {
+        timeout.tv_sec = 2; //2 secondi
+        timeout.tv_usec = 0; // 0 microsecondi
+
+        //NON FUNZIONA
+        while (msgcounter < 10) { //per due secondi o finche' il buffer non e' pieno raccoglie tutti i messaggi che riceve
+            FD_ZERO(&fdset);
+            FD_SET(args->pipefd[0], &fdset);
+            select_ris = select((args->pipefd[0])+1, &fdset, NULL, NULL, &timeout);
+
+            if (select_ris == -1)
+                error("ERROR reading from pipe");
+
+            if (select_ris == 0) {
+                break;
+            }
+            else {
+                read(args->pipefd[0], msgBuff[msgcounter], sizeof(message_s));
+                msgcounter++;
+                //non so se funziona, in pratica ricalcolo il tempo da aspettare la prossima volta
+                //non dovrebbe servire perche select mette dentro timeout il tempo non usato dal wait
+                //timeout.tv_sec = (2 - timediff);
+                //timeout.tv_usec = (2 - timediff) - timeout.tv_sec;
+            }
+        }
+
+        if (msgcounter == 0)
+            continue;
+
+        ordina(msgBuff, msgcounter);
+
+        //forse la parte dentro a questo ciclo si puo' spostare in una funzione che puo usare anche l'altro thread
+        for (int i = 0; i < msgcounter; i++) {
+
+            loctime = localtime(&(msgBuff[i]->timestamp));
+
+            if (msgBuff[i]->isannounce) {
+                strcpy(sendBuff, msgBuff[i]->msg);
+            } else {
+                snprintf(sendBuff, sizeof(sendBuff), "(%02d:%02d:%02d) [%s]: %s", loctime->tm_hour, loctime->tm_min, loctime->tm_sec, msgBuff[i]->usr, msgBuff[i]->msg);
+            }
+            
+            fputs(sendBuff, logfile);
+            fflush(logfile);
+
+
+            for (int j = 0; j < MAX_USERS; j++) {
+                if (args->clients[j].in_use) {
+                    write(args->clients[j].clifd, sendBuff, strlen(sendBuff));
+                }
+            }
+            memset(sendBuff, 0, sizeof(sendBuff));
+        }
+
+        for (int i = 0; i < msgcounter; i++) {
+            memset(msgBuff[i], 0, sizeof(message_s)); //pulisco tutte le locazioni di memoria usate
+        }
+        msgcounter = 0;
+    }
+}
+
 //====MAIN====
 
 int main(int argc, char *argv[])
@@ -177,7 +323,7 @@ int main(int argc, char *argv[])
     int listenfd, tempfd, clino, users = 0;
     struct sockaddr_in serv_addr;
     clinfo client_info[MAX_USERS];
-    char message[] = "Il server e' pieno, riprovare piu' tardi\n"; //messaggio da usare in caso il server sia pieno
+    char error_full[] = "Il server e' pieno, riprovare piu' tardi\n"; //messaggio da usare in caso il server sia pieno
     pthread_t clithread_id[MAX_USERS], msgthread_id;
     int pipefd[2]; //file descriptor della pipe
     struct msgargs msgthread_args;
@@ -198,9 +344,9 @@ int main(int argc, char *argv[])
     //fine sigaction ====
 
     //se non ci sono abbastanza argomenti 
-    if(argc != 2) {
+    if(argc != 3) {
         //MAGARI TRASFORMARLO IN ERROR
-        printf("\n Usage: %s <port>\n",argv[0]);
+        printf("\n Usage: %s <port> <nmetodo>\n Dove: nmetodo = 1 per messaggi ordinati in base al tempo di ricezione del server\n       nmetodo = 2 per messaggi ordinati in base al tempo di invio",argv[0]);
         return 1;
     }
 
@@ -233,7 +379,11 @@ int main(int argc, char *argv[])
     //creo thread che si occupa della gestione dei messaggi
     msgthread_args.clients = client_info;
     msgthread_args.pipefd = pipefd;
-    pthread_create(&msgthread_id, 0, &gestisci_messaggi, &msgthread_args);
+    if (atoi(argv[2]) == 1) {
+        pthread_create(&msgthread_id, 0, &gestisci_messaggi, &msgthread_args);
+    } else {
+        pthread_create(&msgthread_id, 0, &gestisci_messaggi_ordinati, &msgthread_args);
+    }
 
     //il server comincia ad accettare messaggi
     while(1) {
@@ -243,7 +393,7 @@ int main(int argc, char *argv[])
         //se il server e' pieno manda un messaggio al client che sta provando a connettersi, chiudi il suo file descriptor e torna all'inizio del ciclo
         //SINCRONIZZAZIONE?
         if ((clino = get_client_number(client_info)) == -1) {
-            write(tempfd, message, strlen(message));
+            write(tempfd, error_full, strlen(error_full));
             close(tempfd);
             sleep(1);
             continue;
