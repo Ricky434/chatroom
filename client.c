@@ -1,78 +1,84 @@
-#include <sys/socket.h> //probabilmente non serve perche incluso da in.h
+/*
+Il client invia messaggi al server nel formato <timestamp:messaggio>, in cui il timestamp e' il numero di secondi passati dall'epoch.
+Inoltre riceve tutti i messaggi inviati dal server e li passa a clientout tramite fifo per stamparli sul terminale
+*/
+#include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h> //serve per inet_pton
-#include <stdio.h> //IO
-#include <string.h> //gestione stringhe
-#include <unistd.h> //chiamate di sistema
-#include <time.h> //time
-#include <sys/types.h> //serve per il tipo del socket
-#include <stdlib.h> //serve per gli errori
-#include <pthread.h> //threads
-#include <sys/stat.h> //fifo
-#include <fcntl.h> //filecontrol (open)
+#include <netdb.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/types.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
 
-#define FIFOFILE "clientfifo" //necessario? ma si dai
+#define MAX_MSG_LEN 512 //lunghezza massima del messaggio
+#define MAX_UNAME_LEN 24 //lunghezza massima dell'username (senza includere il carattere finale \0)
+
+int sockfd; //variabile per il file descriptor del socket, globale cosi` puo` essere usata dall'handler del sigaction
 
 //====FUNZIONI====
+
+//funzione per lanciare un errore
 void error(char *msg)
 {
     perror(msg);
     exit(1);
 }
 
-void quit(int socket)
+void quit()
 {
-    write(socket, "!exit", 5);
-    close(socket); //dovrei chiudere anche gli altri file ma non posso, comunque con exit si chiudono in teoria
+    write(sockfd, "!exit", 5); //invia al server il comando di disconnessione
+    close(sockfd); //chiudi il socket del server
     exit(0);
 }
-//TROVARE MODO PER SEPARARE INPUT E OUTPUT
-//permettere hostnames oltre a indirizzi ip
-//LOGFILE APPEND O NO?, VIENE MESSO ANCHE IL NOME NEL LOGFILE
-//FORSE CONVIENE LEVARE A OGNI MESSAGGIO IL \n FINALE DA INVIARE AL SERVER PER COERENZA
 
 //====THREADS====
 
-//aggiungere commenti
-void *leggi_chat(void *sockfd)
+//riceve continuamente i messaggi inviati dal server
+void *leggi_chat()
 {
-    int n, fd;
-    int *socket;
-    char recvBuff[1024];
-    struct stat res;
+    int fd; //file descriptor della fifo per comunicare con clientout
+    char recvBuff[MAX_MSG_LEN]; //buffer per il messaggio da ricevere
+    struct stat res; //risultato della stat
 
-    socket = sockfd;
+    //pulisco il buffer per il messaggio da ricevere
     memset(recvBuff, 0, sizeof(recvBuff));
 
-    //copiato e incollato spudoratamente
-    if (stat(FIFOFILE, &res)) { //controlla se gia esiste una fifo
-        if (mkfifo(FIFOFILE, S_IRUSR | S_IWUSR) == -1 )
+    if (stat("clientfifo", &res)) { //controlla se gia esiste un file chiamato clientfifo
+        if (mkfifo("clientfifo", S_IRUSR | S_IWUSR) == -1 ) //se non esiste provo a creare la fifo
                 error("ERROR creating fifo");
     }
-    else if (!S_ISFIFO(res.st_mode)) { //controlla se il file che esiste gia e' una fifo o no
-        fprintf(stderr, "File already exists and is not a named pipe\n");
+    else if (!S_ISFIFO(res.st_mode)) { //se esiste controlla se il file che esiste gia e' una fifo o no
+        fprintf(stderr, "File already exists and is not a named pipe\n"); //se non e' una fifo termina con errore
         exit(5);
     }
     
-    fd = open("clientfifo", O_WRONLY); //non riesco a chiuderlo in nessun modo?
+    //apro la fifo
+    fd = open("clientfifo", O_WRONLY);
+    if (fd < 0) {
+        error("ERROR opening fifo");
+    }
 
     while (1) {
         //ricevo il messaggio
-        if ((n = read(*socket, recvBuff, sizeof(recvBuff)-1)) == 0) {
+        if ((read(sockfd, recvBuff, sizeof(recvBuff))) < 0) { 
             printf("\rERROR reading from server, it might be down\n");
-            exit(1); //vedi che error code metterci
+            exit(1);
         }
 
-        //SERVE? aggiungo un carattere di fine stringa al messaggio
-        recvBuff[n] = 0;
-
-        //FPUTS O WRITE? SERVE ERRORE? scrivo su sdout il messaggio ricevuto
-        if(write(fd, recvBuff, strlen(recvBuff)) == 0)
+        //scrivo sulla fifo il messaggio ricevuto
+        if(write(fd, recvBuff, sizeof(recvBuff)) < 0)
         {
-            printf("ERROR writing to fifo\n"); //ERROR HANDLING
+            error("ERROR writing to fifo\n"); 
         }
 
-        memset(recvBuff, 0,sizeof(recvBuff));
+        //pulisco il buffer per il prossimo messaggio
+        memset(recvBuff, 0, sizeof(recvBuff));
     }
 }
 
@@ -80,24 +86,26 @@ void *leggi_chat(void *sockfd)
 
 int main(int argc, char *argv[])
 {
-    int sockfd; //creo la variabile per il file descriptor del socket
-    char sendBuff[1024], readBuff[1024]; //preparo il buffer per mandare messaggi
-    struct sockaddr_in serv_addr; //creo la variabile delle informazioni del socket del server
-    pthread_t thread_id; //creo la variabile per salvare l'id del thread che verra' creato
-    FILE *clilog;
-    time_t now;
+    char sendBuff[MAX_MSG_LEN]; //buffer per mandare messaggi
+    char readBuff[MAX_MSG_LEN-15-MAX_UNAME_LEN]; //buffer per leggere input [il messaggio verra' inviato ai client dal server nel formato <(hh:mm:ss) [username]: messaggio>, quindi 15+MAX_UNAME_LEN caratteri (max) del messaggio vengono sprecati]
+    struct sockaddr_in serv_addr; //informazioni del socket del server
+    struct hostent *server; //variabile per contenere il risultato di gethostbyname
+    pthread_t thread_id; //id del thread che verra' creato
+    FILE *clilog; //file di log
+    time_t now; //timestamp che verra' assegnato al messaggio
+    struct sigaction act; //informazioni da dare al sigaction
+    sigset_t set; //insieme di segnali da bloccare durante l'esecuzione del gestore
 
     //se il programma viene chiamato senza specificare indirizzo e porta del server il programma termina spiegando cosa inserire
     if(argc != 3) {
-        //MAGARI TRASFORMARLO IN ERROR
         printf("\n Usage: %s <ip of server> <port>\n",argv[0]);
         return 1;
     }
 
-    //"pulisco" il buffer e serv_addr
+    //"pulisco" le locazioni di memoria
     memset(sendBuff, 0, sizeof(sendBuff));
-    memset(readBuff, 0, sizeof(readBuff));
-    memset(&serv_addr, 0, sizeof(serv_addr)); 
+    memset(readBuff, 0, sizeof(readBuff)); 
+    memset(&serv_addr, 0, sizeof(serv_addr));
 
     //creo il socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -109,58 +117,88 @@ int main(int argc, char *argv[])
     serv_addr.sin_port = htons(atoi(argv[2]));
 
     //trasformo l'indirizzo dato come argomento nel giusto formato e lo assegno al serv_addr
-    inet_pton(AF_INET, argv[1], &serv_addr.sin_addr);
+    server = gethostbyname(argv[1]);
+    //se gethostbyname non restituisce niente vuol dire che non ha trovato il server
+    if (server == NULL) {
+        printf("ERROR, no such host\n");
+        exit(0);
+    }
+    //aggiungo l'indirizzo del server alle informazioni per il socket
+    strncpy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
 
     //provo a connettermi al sever e lancio un errore in caso di fallimento
     if( connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
         error("ERROR failed connecting");
 
+
+    //imposto SIGTERM come segnale da bloccare durante l'esecuzione dell'handler
+    sigemptyset(&set);
+    sigaddset(&set, SIGTERM);
+
+    act.sa_flags = 0; //imposto i flags a 0
+    act.sa_mask = set; //aggiungo set alle informazioni da dare al sigaction
+    act.sa_handler = &quit; //imposto la funzione quit come handler
+
+    //sigaction su SIGINT
+    sigaction(SIGINT, &act, NULL);
+
+
     //creo un thread che legge costantemente i messaggi che arrivano dal server
     pthread_create(&thread_id, 0, &leggi_chat, &sockfd);
 
+    //apro il file di log
     clilog = fopen("clilog.txt", "w+");
 
-    //write(1, "Username: ", strlen("Username: "));
+    //Scrivo il prompt per l'username sul client
     printf("Username: ");
     fflush(stdout);
 
-    //invio e ricevo messaggi al server finche' non premo invio senza aver scritto niente (da levare e trovare un altro metodo per chiudere)
-    //DA FARE: capire bene come gestire la cosa di omettere l'ultimo byte dei messaggi come fa il prof negli esempi
+    //invio e ricevo messaggi al server finche' non ricevo il comando per terminare la chat (!exit)
     while (1){
-        read(0, readBuff, sizeof(readBuff)); //error handling? READ O SCANF?
-
-        if (strcmp(readBuff, "!exit\n") == 0) { //termina programma, define?
-            fclose(clilog);
-            quit(sockfd);
+        //leggo dallo stdin
+        if (read(0, readBuff, sizeof(readBuff)-2) < 0) { //lascio due byte per lo \n e lo \0
+            error("\rERROR reading input\n");
         }
+
+        //se leggo !exit chiudo il file di log e chiudo il programma
+        if (strcmp(readBuff, "!exit\n") == 0) {
+            fclose(clilog);
+            quit();
+        }
+
+        //se leggo solo "\n" vuol dire che l'utente ha premuto invio senza scrivere niente, quindi faccio ricominciare il ciclo riscrivendo il prompt
         if (strcmp(readBuff, "\n") == 0) {
-            printf("> "); //ripetitivo?
+            printf("> ");
             fflush(stdout);
             continue;
         }
 
-        //creo timestamp
-        now = time(NULL);
-
-        fprintf(clilog, "[%.24s] %s", ctime(&now), readBuff); //logfile
-        fflush(clilog);
-
-        //aggiungo timestamp
-        snprintf(sendBuff, sizeof(sendBuff), "%ld:%s", now, readBuff);
-
-        //levo il carattere di ritorno - mi sa che non ne vale la pena PIUTTOSTO DOVREI AGGIUNGERE \0 DOPO \n? O COME MINIMO NELL'ULTIMO BYTE DEL BUFFER PER ESSERE SICURO CHE LA STRINGA TERMINI?
-        //sendBuff[strlen(sendBuff)-1] = 0; //modo piu efficace di settare l'ultimo carattere a \0?, forse e' meglio lasciare lo \n
-        //mando il messaggio
-        if (write(sockfd, sendBuff, strlen(sendBuff)) == 0) { //forse devo inviare tutti e 1024 i byte dek buffer, visto che il server provera' a leggerne 1024...
-            printf("\rERROR writing from server, it might be down\n");
-            exit(1); //vedi che error code metterci
+        //se l'utente ha scritto un messaggio troppo lungo, e questo e' stato troncato, aggiungo un carattere di ritorno al messaggio
+        if (readBuff[sizeof(readBuff)-3] != '\0' && readBuff[sizeof(readBuff)-3] != '\n') {
+            readBuff[sizeof(readBuff)-2] = '\n';
         }
 
-        //pulisco il buffer
+        //creo il timestamp del messaggio
+        now = time(NULL);
+
+        //scrivo il messaggio nel file di log
+        fprintf(clilog, "[%.24s] %s", ctime(&now), readBuff);
+        fflush(clilog);
+
+        //creo la stringa da inviare, con formato <timestamp:messaggio>
+        snprintf(sendBuff, sizeof(sendBuff), "%ld:%s", now, readBuff);
+
+        //mando il messaggio
+        if (write(sockfd, sendBuff, sizeof(sendBuff)) < 0) {
+            error("\rERROR writing to server, it might be down\n");
+        }
+
+        //pulisco i buffer
         memset(sendBuff, 0, sizeof(sendBuff));
         memset(readBuff, 0, sizeof(readBuff));
 
-        printf("> "); //prompt
+        //riscrivo il prompt
+        printf("> ");
         fflush(stdout);
     }
 }

@@ -1,0 +1,8 @@
+Avviare prima il server (./server <porta> <modalità 1 o 2>), poi il client (./client <indirizzo> <porta>) e infine il clientout
+
+Ho diviso la parte client nei programmi "client", che si occupa di prendere in input i messaggi  scritti dall'utente, e "clientout", che si occupa di scrivere a schermo i messaggi ricevuti.
+I due programmi vanno eseguiti in due terminali diversi, in modo da evitare che i messaggi ricevuti sovrascrivano quello che che l'utente sta scrivendo.
+I due programmi comunicano con una fifo, quindi ogni utente deve avere la propria cartella.
+
+"make" per compilare
+"make setup" per creare anche le cartelle per due utenti e copiarci dentro gli eseguibili di client e clientout

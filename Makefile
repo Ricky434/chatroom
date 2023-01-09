@@ -1,6 +1,8 @@
 CC := gcc
 CFLAGS := -Wall
-PROGS := client clientout server3
+PROGS := client clientout server
+
+all: $(PROGS)
 
 client: client.c
 	$(CC) $(CFLAGS) $^ -o $@ -pthread
@@ -8,10 +10,16 @@ client: client.c
 clientout: clientout.c
 	$(CC) $(CFLAGS) $^ -o $@
 
-server3: server3.c
+server: server.c
 	$(CC) $(CFLAGS) $^ -o $@ -pthread
 
+setup: all
+	mkdir -p utente1
+	mkdir -p utente2
+	cp client clientout utente1
+	cp client clientout utente2
 
-.PHONY: all
 
-all: $(PROGS)
+.PHONY: all setup
+
+
