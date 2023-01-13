@@ -19,6 +19,11 @@ setup: all
 	cp client clientout utente1
 	cp client clientout utente2
 
+clean:
+	rm -f $(PROGS)
+
+distclean: clean
+	rm -rf log.txt utente1 utente2
 
 .PHONY: all setup
 

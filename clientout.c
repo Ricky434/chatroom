@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
         }
 
         //stampa a schermo il messaggio ricevuto
-        printf(recvBuff);
+        printf("%s", recvBuff);
 
         //pulisci il buffer
         memset(recvBuff, 0,sizeof(recvBuff));

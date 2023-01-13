@@ -18,6 +18,8 @@ Inoltre riceve tutti i messaggi inviati dal server e li passa a clientout tramit
 
 #define MAX_MSG_LEN 512 //lunghezza massima del messaggio
 #define MAX_UNAME_LEN 24 //lunghezza massima dell'username (senza includere il carattere finale \0)
+#define EXIT_CMD "!exit" //comando usato da un utente per disconnettersi dal server
+#define EXIT_CMDR "!exit\n" //comando usato da un utente per disconnettersi dal server piu' il carattere di ritorno
 
 int sockfd; //variabile per il file descriptor del socket, globale cosi` puo` essere usata dall'handler del sigaction
 
@@ -32,7 +34,7 @@ void error(char *msg)
 
 void quit()
 {
-    write(sockfd, "!exit", 5); //invia al server il comando di disconnessione
+    write(sockfd, EXIT_CMD, 5); //invia al server il comando di disconnessione
     close(sockfd); //chiudi il socket del server
     exit(0);
 }
@@ -144,7 +146,7 @@ int main(int argc, char *argv[])
 
 
     //creo un thread che legge costantemente i messaggi che arrivano dal server
-    pthread_create(&thread_id, 0, &leggi_chat, &sockfd);
+    pthread_create(&thread_id, 0, &leggi_chat, NULL);
 
     //apro il file di log
     clilog = fopen("clilog.txt", "w+");
@@ -153,15 +155,15 @@ int main(int argc, char *argv[])
     printf("Username: ");
     fflush(stdout);
 
-    //invio e ricevo messaggi al server finche' non ricevo il comando per terminare la chat (!exit)
+    //invio e ricevo messaggi al server finche' non ricevo il comando per terminare la chat (EXIT_CMD)
     while (1){
         //leggo dallo stdin
         if (read(0, readBuff, sizeof(readBuff)-2) < 0) { //lascio due byte per lo \n e lo \0
             error("\rERROR reading input\n");
         }
 
-        //se leggo !exit chiudo il file di log e chiudo il programma
-        if (strcmp(readBuff, "!exit\n") == 0) {
+        //se leggo EXIT_CMDR (il comando contiene anche il carattere di ritorno) chiudo il file di log e chiudo il programma
+        if (strcmp(readBuff, EXIT_CMDR) == 0) {
             fclose(clilog);
             quit();
         }

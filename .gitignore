@@ -2,13 +2,6 @@
 client
 clientout
 server
-server2
-server3
-
-# prove e backup
-client-prova.c
-prove.c
-server3-back.c
 
 # log
 log.txt
